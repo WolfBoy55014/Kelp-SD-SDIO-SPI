@@ -21,8 +21,7 @@ specific language governing permissions and limitations under the License.
 //
 #include "pico/stdlib.h"
 #include "hardware/sync.h"
-//
-#include "crash.h"
+
 //
 #include "my_debug.h"
 
@@ -145,7 +144,7 @@ void __attribute__((weak)) my_assert_func(const char *file, int line, const char
     error_message_printf_plain("assertion \"%s\" failed: file \"%s\", line %d, function: %s\n",
                                pred, file, line, func);
     (void)save_and_disable_interrupts(); /* Disable global interrupts. */
-    capture_assert(file, line, func, pred);
+
 }
 
 void assert_case_not_func(const char *file, int line, const char *func, int v) {

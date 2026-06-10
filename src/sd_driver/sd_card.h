@@ -26,12 +26,9 @@ specific language governing permissions and limitations under the License.
 #include "hardware/gpio.h"
 #include "pico/mutex.h"
 //
-#include "ff.h"
-//
 #include "SDIO/rp2040_sdio.h"
 #include "SPI/my_spi.h"
 #include "SPI/sd_card_spi.h"
-#include "diskio.h"
 #include "sd_card_constants.h"
 #include "sd_regs.h"
 #include "util.h"
@@ -93,14 +90,14 @@ typedef struct sd_sdio_if_t {
 } sd_sdio_if_t;
 
 typedef struct sd_card_state_t {
-    DSTATUS m_Status;       // Card status
+    bool card_detected;
+    bool initialized;
     card_type_t card_type;  // Assigned dynamically
     CSD_t CSD;              // Card-Specific Data register.
     CID_t CID;              // Card IDentification register
     uint32_t sectors;       // Assigned dynamically
 
     mutex_t mutex;
-    FATFS fatfs;
     bool mounted;
 #if FF_STR_VOLUME_ID
     char drive_prefix[32];
@@ -128,7 +125,7 @@ struct sd_card_t {
     They are dynamically assigned. */
     sd_card_state_t state;
 
-    DSTATUS (*init)(sd_card_t *sd_card_p);
+    bool (*init)(sd_card_t *sd_card_p);
     void (*deinit)(sd_card_t *sd_card_p);
     block_dev_err_t (*write_blocks)(sd_card_t *sd_card_p, const uint8_t *buffer,
                                     uint32_t ulSectorNumber, uint32_t blockCnt);

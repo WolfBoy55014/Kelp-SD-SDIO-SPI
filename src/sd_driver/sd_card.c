@@ -30,8 +30,6 @@ specific language governing permissions and limitations under the License.
 #include "sd_timeouts.h"
 #include "util.h"
 //
-#include "diskio.h" /* Declarations of disk functions */  // Needed for STA_NOINIT, ...
-//
 #include "sd_card.h"
 
 #define TRACE_PRINTF(fmt, args...)
@@ -77,18 +75,19 @@ sd_card_t *sd_get_by_drive_prefix(const char *const drive_prefix) {
 bool sd_card_detect(sd_card_t *sd_card_p) {
     TRACE_PRINTF("> %s\r\n", __FUNCTION__);
     if (!sd_card_p->use_card_detect) {
-        sd_card_p->state.m_Status &= ~STA_NODISK;
+        sd_card_p->state.card_detected = true;
         return true;
     }
     /*!< Check GPIO to detect SD */
     if (gpio_get(sd_card_p->card_detect_gpio) == sd_card_p->card_detected_true) {
         // The socket is now occupied
-        sd_card_p->state.m_Status &= ~STA_NODISK;
+        sd_card_p->state.card_detected = true;
         TRACE_PRINTF("SD card detected!\r\n");
         return true;
     } else {
         // The socket is now empty
-        sd_card_p->state.m_Status |= (STA_NODISK | STA_NOINIT);
+        sd_card_p->state.initialized = false;
+        sd_card_p->state.card_detected = false;
         sd_card_p->state.card_type = SDCARD_NONE;
         EMSG_PRINTF("No SD card detected!\r\n");
         return false;
@@ -138,7 +137,7 @@ bool sd_init_driver() {
                 mutex_init(&sd_card_p->state.mutex);
             sd_lock(sd_card_p);
 
-            sd_card_p->state.m_Status = STA_NOINIT;
+            sd_card_p->state.initialized = false;
 
             sd_set_drive_prefix(sd_card_p, i);
 

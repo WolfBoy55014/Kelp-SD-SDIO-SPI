@@ -172,7 +172,6 @@
 #include <stdarg.h>
 //
 #include "crc.h"
-#include "diskio.h" /* Declarations of disk functions */  // Needed for STA_NOINIT, ...
 #include "hw_config.h"  // Hardware Configuration of the SPI and SD Card "objects"
 #include "my_debug.h"
 #include "delays.h"
@@ -757,7 +756,7 @@ static bool chk_crc16(uint8_t *buffer, size_t length, uint16_t crc) {
     if (crc_on) {
         uint16_t crc_result;
         // Compute and verify checksum
-        crc_result = crc16(buffer, length);
+        crc_result = sd_crc16(buffer, length);
         if (crc_result != crc)
             DBG_PRINTF("%s: Invalid CRC received: 0x%" PRIx16 " computed: 0x%" PRIx16 "\n",
                     __func__, crc, crc_result);
@@ -817,7 +816,7 @@ static block_dev_err_t read_bytes(sd_card_t *sd_card_p, uint8_t *buffer, uint32_
 static block_dev_err_t in_sd_read_blocks(sd_card_t *sd_card_p, uint8_t *buffer,
                                          const uint32_t data_address,
                                          const uint32_t num_rd_blks) {
-    if (sd_card_p->state.m_Status & (STA_NOINIT | STA_NODISK))
+    if (!sd_card_p->state.initialized || !sd_card_p->state.card_detected)
         return SD_BLOCK_DEVICE_ERROR_PARAMETER;
     if (!num_rd_blks) return SD_BLOCK_DEVICE_ERROR_PARAMETER;
     if (data_address + num_rd_blks > sd_card_p->state.sectors)
@@ -991,7 +990,7 @@ static block_dev_err_t send_block(sd_card_t *sd_card_p, const uint8_t *buffer, u
     // While DMA transfers the block, compute CRC:
     if (crc_on) {
         // Compute CRC
-        crc = crc16((void *)buffer, length);
+        crc = sd_crc16((void *)buffer, length);
     }
     uint32_t timeout = calculate_transfer_time_ms(sd_card_p->spi_if_p->spi, length);
     bool ok = sd_spi_transfer_wait_complete(sd_card_p, timeout);
@@ -1242,7 +1241,7 @@ static block_dev_err_t sd_write_blocks(sd_card_t *sd_card_p, uint8_t const buffe
         return SD_BLOCK_DEVICE_ERROR_PARAMETER;
 
     // Check if the device is initialized and not missing
-    if (sd_card_p->state.m_Status & (STA_NOINIT | STA_NODISK))
+    if (!sd_card_p->state.initialized || !sd_card_p->state.card_detected)
         return SD_BLOCK_DEVICE_ERROR_PARAMETER;
 
     // Check if the number of blocks to write is valid
@@ -1519,7 +1518,7 @@ static bool sd_spi_test_com(sd_card_t *sd_card_p) {
 
     bool success = false;
 
-    if (!(sd_card_p->state.m_Status & STA_NOINIT)) {
+    if (sd_card_p->state.initialized) {
         // SD card is currently initialized
 
         // Timeout of 0 means only check once
@@ -1538,7 +1537,7 @@ static bool sd_spi_test_com(sd_card_t *sd_card_p) {
 
             if (!success) {
                 // Card no longer sensed - ensure card is initialized once re-attached
-                sd_card_p->state.m_Status |= STA_NOINIT;
+                sd_card_p->state.initialized = false;
             }
         } else {
             // SD card is currently holding DO which is sufficient enough to know it's still
@@ -1594,7 +1593,7 @@ static bool sd_spi_test_com(sd_card_t *sd_card_p) {
  *  STA_NODISK = 0x02, // No medium in the drive
  *  STA_PROTECT = 0x04 // Write protected
  */
-DSTATUS sd_card_spi_init(sd_card_t *sd_card_p) {
+bool sd_card_spi_init(sd_card_t *sd_card_p) {
     TRACE_PRINTF("> %s\n", __FUNCTION__);
 
     // Acquire the lock
@@ -1602,16 +1601,14 @@ DSTATUS sd_card_spi_init(sd_card_t *sd_card_p) {
 
     // Check if there's a card in the socket before proceeding
     sd_card_detect(sd_card_p);
-    if (sd_card_p->state.m_Status & STA_NODISK) {
-        // Release the lock and return the current status
+    if (!sd_card_p->state.card_detected) {
         sd_unlock(sd_card_p);
-        return sd_card_p->state.m_Status;
+        return false;
     }
     // Check if we're not already initialized before proceeding
-    if (!(sd_card_p->state.m_Status & STA_NOINIT)) {
-        // Release the lock and return the current status
+    if (sd_card_p->state.initialized) {
         sd_unlock(sd_card_p);
-        return sd_card_p->state.m_Status;
+        return true;
     }
 
     // Initialize the member variables
@@ -1625,13 +1622,13 @@ DSTATUS sd_card_spi_init(sd_card_t *sd_card_p) {
     if (SD_BLOCK_DEVICE_ERROR_NONE != err) {
         EMSG_PRINTF("Failed to initialize card\n");
         sd_release(sd_card_p);
-        return sd_card_p->state.m_Status;
+        return false;
     }
     // No support for SDSC Card (CCS=0) with byte unit address
     if (SDCARD_V2HC != sd_card_p->state.card_type) {
         EMSG_PRINTF("SD Standard Capacity Memory Card unsupported\n");
         sd_release(sd_card_p);
-        return sd_card_p->state.m_Status;
+        return false;
     }
 
     DBG_PRINTF("SD card initialized\n");
@@ -1644,18 +1641,18 @@ DSTATUS sd_card_spi_init(sd_card_t *sd_card_p) {
     if (0 == sd_card_p->state.sectors) {
         // CMD9 failed
         sd_release(sd_card_p);
-        return sd_card_p->state.m_Status;
+        return false;
     }
     // Get the CID of the card
     if (SD_BLOCK_DEVICE_ERROR_NONE != sd_cmd(sd_card_p, CMD10_SEND_CID, 0x0, false, 0)) {
         DBG_PRINTF("Didn't get a response from the disk\n");
         sd_release(sd_card_p);
-        return sd_card_p->state.m_Status;
+        return false;
     }
     if (read_bytes(sd_card_p, (uint8_t *)&sd_card_p->state.CID, sizeof(CID_t)) != 0) {
         DBG_PRINTF("Couldn't read CID response from disk\n");
         sd_release(sd_card_p);
-        return sd_card_p->state.m_Status;
+        return false;
     }
 
     // Set the block length to 512 (CMD16)
@@ -1663,17 +1660,17 @@ DSTATUS sd_card_spi_init(sd_card_t *sd_card_p) {
         sd_cmd(sd_card_p, CMD16_SET_BLOCKLEN, sd_block_size, false, 0)) {
         DBG_PRINTF("Set %u-byte block timed out\n", sd_block_size);
         sd_release(sd_card_p);
-        return sd_card_p->state.m_Status;
+        return false;
     }
 
     // The card is now initialized
-    sd_card_p->state.m_Status &= ~STA_NOINIT;
+    sd_card_p->state.initialized = true;
 
     // Release the SD card
     sd_release(sd_card_p);
 
     // Return the disk status
-    return sd_card_p->state.m_Status;
+    return true;
 }
 
 /**
@@ -1686,7 +1683,7 @@ DSTATUS sd_card_spi_init(sd_card_t *sd_card_p) {
  * @param sd_card_p Pointer to the sd_card_t structure to be deinitialized.
  */
 static void sd_deinit(sd_card_t *sd_card_p) {
-    sd_card_p->state.m_Status |= STA_NOINIT;
+    sd_card_p->state.initialized = false;
     sd_card_p->state.card_type = SDCARD_NONE;
 
     if ((uint)-1 != sd_card_p->spi_if_p->ss_gpio) {
