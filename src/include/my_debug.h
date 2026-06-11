@@ -69,8 +69,7 @@ int info_message_printf(const char *fmt, ...) __attribute__((format(__printf__, 
 void lock_printf();
 void unlock_printf();
 
-void my_assert_func(const char *file, int line, const char *func, const char *pred)
-    __attribute__((noreturn));
+void my_assert_func(const char *file, int line, const char *func, const char *pred);
 #ifdef NDEBUG           /* required by ANSI standard */
 #  define myASSERT(__e) ((void)0)
 #else
@@ -87,8 +86,7 @@ void assert_case_is(const char *file, int line, const char *func, int v, int exp
 #define ASSERT_CASE_IS(__v, __e) \
     ((__v == __e) ? (void)0 : assert_case_is(__FILE__, __LINE__, __func__, __v, __e))
 
-void assert_case_not_func(const char *file, int line, const char *func, int v)
-    __attribute__((noreturn));
+void assert_case_not_func(const char *file, int line, const char *func, int v);
 #define ASSERT_CASE_NOT(__v) (assert_case_not_func(__FILE__, __LINE__, __func__, __v))
 
 #ifdef NDEBUG /* required by ANSI standard */
